@@ -26,6 +26,7 @@ See the file LICENSE for details.
 #include "cdromfs.h"
 #include "diskfs.h"
 #include "serial.h"
+#include "pci.h"
 
 /*
 This is the C initialization point of the kernel.
@@ -51,6 +52,7 @@ int kernel_main()
 	clock_init();
 	mouse_init();
 	keyboard_init();
+	pci_init();
 	process_init();
 	ata_init();
 	cdrom_init();

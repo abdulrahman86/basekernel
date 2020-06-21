@@ -32,7 +32,7 @@ static inline uint16_t inw(int port)
 	return result;
 }
 
-static inline uint16_t inl(int port)
+static inline uint32_t inl(int port)
 {
 	uint32_t result;
       asm("inl %w1, %0": "=a"(result):"Nd"(port));
