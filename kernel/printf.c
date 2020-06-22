@@ -108,6 +108,7 @@ void printf(const char *s, ...)
 				break;
 			case 'x':
 				u = va_arg(args, uint32_t);
+				printf_putstring("0x");
 				printf_puthex(u);
 				break;
 			case 's':
