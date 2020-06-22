@@ -160,6 +160,10 @@ struct pci_bar get_bar(uint16_t bus, uint16_t device, uint16_t function, uint16_
     uint32_t bar_value = pci_read_dev_register(bus, device, function, 0x10 + 4*bar);
     result.type = (bar_value & 0x1) ? InputOutput : MemoryMapping;
     uint32_t temp;
+
+    const char * ptext_pref = "prefetchable"; // text for prefetchable
+    const char * ptext_nopr = "non-prefetchable"; // Text for non-prefetchable
+    const char * const ptext = (((pci_read_dev_register(bus, device, function, 0x10 + 4*bar) >> 3) & 0x1) == 1)? ptext_pref: ptext_nopr;
     
     
     
@@ -170,6 +174,42 @@ struct pci_bar get_bar(uint16_t bus, uint16_t device, uint16_t function, uint16_
         {
             
             case 0: // 32 Bit Mode
+            {
+        		uint32_t old_val = pci_read_dev_register(bus, device, function, 0x10 + 4*bar);
+
+				pci_write_dev_register(bus, device, function, 0x10 + 4*bar, 0xFFFFFFF0); // overwrite with all 1's
+				const uint32_t barValue = pci_read_dev_register(bus, device, function, 0x10 + 4*bar) & 0xFFFFFFF0; // and read back
+				
+				//restore old value for bar
+				pci_write_dev_register(bus, device, function, 0x10 + 4*bar, old_val);
+
+				if (barValue == 0) // there must be at least one address bit 1 (i.e. writable)
+				{
+					if (ptext != ptext_nopr)
+					{
+						// unused BARs must be completely 0 (the prefetchable bit must also not be set)
+						printf ("ERROR: 32Bit-Memory-BAR %d contains no writable address bits! \n", bar); 
+						return;
+					}
+						
+					// Output BAR information:
+					printf ("BAR %d is unused. \n", bar);
+				}
+				else
+				{
+					const uint32_t lowestBit = get_number_of_lowest_set_bit (barValue);
+					// it must be a valid 32-bit address:
+					if ((get_number_of_highest_set_bit (barValue)!= 31) || (lowestBit> 31) || (lowestBit <4))
+					{
+					 	printf ("ERROR: 32Bit-Memory-BAR %d contains invalid writable address bits! \n", bar); 
+					 	return; 
+					}
+
+					// Output BAR information:
+					printf ("BAR %d contains a %s 32-bit memory resource with a size of 2 ^%d bytes. \ n", bar, ptext, lowestBit);
+				}
+            }
+            break;
             case 1: // 20 Bit Mode
             case 2: // 64 Bit Mode
                 break;
