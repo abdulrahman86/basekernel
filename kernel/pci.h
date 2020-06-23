@@ -18,6 +18,13 @@ struct pci_bar {
     enum pci_bar_type type;
 };
 
+struct pci_bdt {
+
+    uint16_t bus;
+    uint16_t device;
+    uint16_t function;
+};
+
 
 struct pci_dev {
 

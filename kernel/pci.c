@@ -16,9 +16,12 @@ uint32_t pci_read_dev_register(uint16_t bus, uint16_t device, uint16_t function,
 uint32_t pci_write_dev_register(uint16_t bus, uint16_t device, uint16_t function, uint32_t registeroffset, uint32_t value);
 bool pci_dev_has_functions(uint16_t bus, uint16_t device);
 struct pci_dev pci_get_dev(uint16_t bus, uint16_t device, uint16_t function);
-struct pci_bar get_bar(uint16_t bus, uint16_t device, uint16_t function, uint16_t bar);
+struct pci_bar get_bar(struct pci_bdt pci_bdt, uint16_t bar);
 uint32_t get_number_of_lowest_set_bit(uint32_t value);
 uint32_t get_number_of_highest_set_bit(uint32_t value);
+uint32_t pci_read_dev_register_1(struct pci_bdt pci_bdt, uint32_t registeroffset);
+uint32_t pci_write_dev_register_1(struct pci_bdt pci_bdt, uint32_t registeroffset, uint32_t value);
+
 
 
 
@@ -51,21 +54,32 @@ void pci_init() {
 
                 	num_devices++;
 
-                	printf("PCI Device Info: Bus:%x, Device:%x, Function:%x, Vendor:%x, Device ID:%x", 
-                		bus, device, function, dev.vendor_id, dev.device_id);
+                	printf("%x:%x:%x:%x:%x:", 
+                		dev.bus, dev.device, dev.vendor_id, dev.device_id, dev.function);
 
-                	for(int barNum = 0; barNum < 6; barNum++) {
+                	for(int i = 0; i < 6; i++) {
 
-	                    struct pci_bar bar = get_bar(bus, device, function, barNum);
+                		struct pci_bdt pci_bdt = {.bus = bus, .device = device, .function = function};
+
+	                    struct pci_bar bar = get_bar(pci_bdt, i);
 	                    if(bar.address && (bar.type == InputOutput)) {
 
-	                    	printf(", PCI Device Address:%x\n", bar.address);
+	                    	printf(":[%d.%x:%s]:", i, bar.address, "InputOutput");
+
+	                    	dev.bar[i] = bar;
 
 	                        dev.portBase = (uint32_t)bar.address;
 	                    }
+
+	                    else if (bar.address && bar.type == MemoryMapping) {
+
+	                    	printf("[%d.%x:%s]", i, bar.address, "Memory Mapped");
+
+	                    	dev.bar[i] = bar;
+	                    }
                 	}
 
-                	printf("\n");
+                	printf("\n\n");
 
 
                 }
@@ -145,27 +159,28 @@ struct pci_dev pci_get_dev(uint16_t bus, uint16_t device, uint16_t function)
     return result;
 }
 
-struct pci_bar get_bar(uint16_t bus, uint16_t device, uint16_t function, uint16_t bar)
+struct pci_bar get_bar(struct pci_bdt pci_bdt, uint16_t bar)
 {
+	uint16_t bus = pci_bdt.bus; 
+	uint16_t device = pci_bdt.device;
+	uint16_t function = pci_bdt.function;
+
     struct pci_bar result;
 
-    
-    
-    uint32_t headertype = pci_read_dev_register(bus, device, function, 0x0E) & 0x7F;
+    uint32_t headertype = pci_read_dev_register_1(pci_bdt, 0x0E) & 0x7F;
     int maxBARs = 6 - (4*headertype);
     if(bar >= maxBARs)
         return result;
     
     
-    uint32_t bar_value = pci_read_dev_register(bus, device, function, 0x10 + 4*bar);
+    uint32_t bar_value = pci_read_dev_register_1(pci_bdt, 0x10 + 4*bar);
     result.type = (bar_value & 0x1) ? InputOutput : MemoryMapping;
     uint32_t temp;
 
+    bool prefetchable = (((pci_read_dev_register_1(pci_bdt, 0x10 + 4*bar) >> 3) & 0x1) == 1);
     const char * ptext_pref = "prefetchable"; // text for prefetchable
     const char * ptext_nopr = "non-prefetchable"; // Text for non-prefetchable
-    const char * const ptext = (((pci_read_dev_register(bus, device, function, 0x10 + 4*bar) >> 3) & 0x1) == 1)? ptext_pref: ptext_nopr;
-    
-    
+    const char * const ptext = prefetchable? ptext_pref: ptext_nopr;    
     
     if(result.type == MemoryMapping)
     {
@@ -175,38 +190,45 @@ struct pci_bar get_bar(uint16_t bus, uint16_t device, uint16_t function, uint16_
             
             case 0: // 32 Bit Mode
             {
-        		uint32_t old_val = pci_read_dev_register(bus, device, function, 0x10 + 4*bar);
+        		uint32_t old_val = pci_read_dev_register_1(pci_bdt, 0x10 + 4*bar);
 
 				pci_write_dev_register(bus, device, function, 0x10 + 4*bar, 0xFFFFFFF0); // overwrite with all 1's
-				const uint32_t barValue = pci_read_dev_register(bus, device, function, 0x10 + 4*bar) & 0xFFFFFFF0; // and read back
+				const uint32_t bar_value = pci_read_dev_register_1(pci_bdt, 0x10 + 4*bar) & 0xFFFFFFF0; // and read back
 				
 				//restore old value for bar
-				pci_write_dev_register(bus, device, function, 0x10 + 4*bar, old_val);
+				pci_write_dev_register_1(pci_bdt, 0x10 + 4*bar, old_val);
 
-				if (barValue == 0) // there must be at least one address bit 1 (i.e. writable)
+				if (bar_value == 0) // there must be at least one address bit 1 (i.e. writable)
 				{
-					if (ptext != ptext_nopr)
-					{
-						// unused BARs must be completely 0 (the prefetchable bit must also not be set)
-						printf ("ERROR: 32Bit-Memory-BAR %d contains no writable address bits! \n", bar); 
-						return;
-					}
+					// if (ptext != ptext_nopr)
+					// {
+					// 	// unused BARs must be completely 0 (the prefetchable bit must also not be set)
+					// 	printf ("ERROR: 32Bit-Memory-BAR %d contains no writable address bits! \n", bar); 
+					// 	return;
+					// }
 						
 					// Output BAR information:
-					printf ("BAR %d is unused. \n", bar);
+					//printf ("BAR %d is unused. \n", bar);
+					return result;
 				}
 				else
 				{
-					const uint32_t lowestBit = get_number_of_lowest_set_bit (barValue);
+					const uint32_t lowestBit = get_number_of_lowest_set_bit (bar_value);
 					// it must be a valid 32-bit address:
-					if ((get_number_of_highest_set_bit (barValue)!= 31) || (lowestBit> 31) || (lowestBit <4))
+					if ((get_number_of_highest_set_bit (bar_value)!= 31) || (lowestBit> 31) || (lowestBit <4))
 					{
-					 	printf ("ERROR: 32Bit-Memory-BAR %d contains invalid writable address bits! \n", bar); 
-					 	return; 
+					 	//printf ("ERROR: 32Bit-Memory-BAR %d contains invalid writable address bits! \n", bar); 
+					 	return result; 
 					}
 
 					// Output BAR information:
-					printf ("BAR %d contains a %s 32-bit memory resource with a size of 2 ^%d bytes. \ n", bar, ptext, lowestBit);
+
+			        result.address = (uint8_t*)(bar_value);
+			        result.prefetchable = prefetchable;
+
+			        return result;
+
+					//printf ("BAR %d contains a %s 32-bit memory resource with a size of 2 ^%d bytes. \ n", bar, ptext, lowestBit);
 				}
             }
             break;
@@ -242,6 +264,18 @@ uint32_t get_number_of_highest_set_bit(uint32_t value)
    { --pos; mask=mask>>1; }
   return pos;
 }
+
+uint32_t pci_read_dev_register_1(struct pci_bdt dev, uint32_t registeroffset) {
+
+	return pci_read_dev_register(dev.bus, dev.device, dev.function, registeroffset);
+}
+
+uint32_t pci_write_dev_register_1(struct pci_bdt dev, uint32_t registeroffset, uint32_t value) {
+
+	return pci_write_dev_register(dev.bus, dev.device, dev.function, registeroffset, value);
+
+}
+
 
 
 
